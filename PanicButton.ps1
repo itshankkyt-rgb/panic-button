@@ -40,6 +40,10 @@ if ($consoleHandle -ne [IntPtr]::Zero) {
     [PanicButtonInternal.ConsoleWindow]::ShowWindow($consoleHandle, 0) | Out-Null  # SW_HIDE
 }
 
+$script:AppVersion = '1.2.0'
+$script:VersionCheckUrl = 'https://raw.githubusercontent.com/itshankkyt-rgb/panic-button/main/VERSION'
+$script:LatestScriptUrl = 'https://raw.githubusercontent.com/itshankkyt-rgb/panic-button/main/PanicButton.ps1'
+
 $ConfigPath = "$PSScriptRoot\config.json"
 
 # Processes we refuse to kill even if focused, so the OS itself never gets nuked.
@@ -157,8 +161,8 @@ $fontSmall  = [System.Drawing.Font]::new("Segoe UI", 8.5)
 
 # ---------- build form ----------
 $form = [HotkeyForm]::new()
-$form.Text = "Panic Button"
-$form.Size = [System.Drawing.Size]::new(380, 480)
+$form.Text = "Panic Button v$($script:AppVersion)"
+$form.Size = [System.Drawing.Size]::new(380, 505)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
@@ -250,10 +254,22 @@ $lstHistory.BorderStyle = "FixedSingle"
 $lstHistory.Font = $fontSmall
 $form.Controls.Add($lstHistory)
 
-$btnHide = New-FlatButton "Hide to Tray" 30 396 150 34 $colPanel $colText
+# update notice - hidden until a newer version is actually found
+$lnkUpdate = [System.Windows.Forms.LinkLabel]::new()
+$lnkUpdate.Font = $fontSmall
+$lnkUpdate.TextAlign = "MiddleCenter"
+$lnkUpdate.LinkColor = $colAccent
+$lnkUpdate.ActiveLinkColor = $colAccent
+$lnkUpdate.LinkBehavior = [System.Windows.Forms.LinkBehavior]::HoverUnderline
+$lnkUpdate.Location = [System.Drawing.Point]::new(30, 388)
+$lnkUpdate.Size = [System.Drawing.Size]::new(320, 18)
+$lnkUpdate.Visible = $false
+$form.Controls.Add($lnkUpdate)
+
+$btnHide = New-FlatButton "Hide to Tray" 30 412 150 34 $colPanel $colText
 $form.Controls.Add($btnHide)
 
-$btnExit = New-FlatButton "Exit" 200 396 150 34 $colPanel $colGray
+$btnExit = New-FlatButton "Exit" 200 412 150 34 $colPanel $colGray
 $form.Controls.Add($btnExit)
 
 # ---------- tray icon ----------
@@ -268,6 +284,59 @@ $icon.ContextMenuStrip = $menu
 # ---------- state ----------
 $script:listening = $false
 $script:reallyExiting = $false
+$script:latestVersion = $null
+
+# ---------- update check (read-only, once per launch) ----------
+# Fetches a single small text file from GitHub to compare versions.
+# Nothing is downloaded/installed unless you click the link that appears.
+function Start-UpdateCheck {
+    $updateCheckJob = Start-Job -ScriptBlock {
+        param($url)
+        try { (Invoke-RestMethod -Uri $url -TimeoutSec 5).ToString().Trim() } catch { $null }
+    } -ArgumentList $script:VersionCheckUrl
+
+    $updateTimer = [System.Windows.Forms.Timer]::new()
+    $updateTimer.Interval = 1500
+    $updateTimer.Add_Tick({
+        if ($updateCheckJob.State -notin @('Completed', 'Failed')) { return }
+        $updateTimer.Stop()
+        $updateTimer.Dispose()
+        $latestVersionString = Receive-Job -Job $updateCheckJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $updateCheckJob -Force -ErrorAction SilentlyContinue
+        if (-not $latestVersionString) { return }
+        try {
+            if ([version]$latestVersionString -gt [version]$script:AppVersion) {
+                $script:latestVersion = $latestVersionString
+                $lnkUpdate.Text = "Update available: v$latestVersionString - click to install"
+                $lnkUpdate.Visible = $true
+            }
+        } catch {}
+    })
+    $updateTimer.Start()
+}
+
+function Install-Update {
+    $confirmResult = [System.Windows.Forms.MessageBox]::Show(
+        "Download and install version $($script:latestVersion)? Panic Button will restart.",
+        "Panic Button Update", 'YesNo', 'Question')
+    if ($confirmResult -ne [System.Windows.Forms.DialogResult]::Yes) { return }
+
+    try {
+        $newScriptContent = Invoke-RestMethod -Uri $script:LatestScriptUrl -TimeoutSec 15
+        if ([string]::IsNullOrWhiteSpace($newScriptContent) -or $newScriptContent.Length -lt 500) {
+            throw "Downloaded content looks invalid - aborting."
+        }
+        Set-Content -Path $PSCommandPath -Value $newScriptContent -Encoding UTF8
+
+        $script:reallyExiting = $true
+        $form.UnregisterGlobalHotkey()
+        $icon.Visible = $false
+        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+        [System.Windows.Forms.Application]::Exit()
+    } catch {
+        [System.Windows.Forms.MessageBox]::Show("Update failed: $_", "Panic Button", 'OK', 'Error') | Out-Null
+    }
+}
 
 function Refresh-StatusUI {
     $label = Format-HotkeyLabel $script:cfg.Modifier $script:cfg.Key
@@ -360,6 +429,8 @@ $btnToggleArm.Add_Click({
     Apply-Hotkey
 })
 
+$lnkUpdate.Add_Click({ Install-Update })
+
 $btnHide.Add_Click({ $form.Hide() })
 $showItem.Add_Click({ $form.Show(); $form.WindowState = 'Normal'; $form.Activate() })
 $icon.Add_DoubleClick({ $form.Show(); $form.WindowState = 'Normal'; $form.Activate() })
@@ -385,4 +456,5 @@ $form.Add_FormClosing({
 # ---------- go ----------
 Refresh-StatusUI
 Apply-Hotkey
+Start-UpdateCheck
 [System.Windows.Forms.Application]::Run($form)

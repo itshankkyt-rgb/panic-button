@@ -33,11 +33,15 @@ This adds a single entry to your user-level `HKCU:\...\Run` registry key (no adm
 .\PanicButton.ps1 -DisableAutostart
 ```
 
+## Updates
+
+Once per launch, the app makes a single read-only request to a small [`VERSION`](VERSION) file in this repo to check if a newer release exists. That's the only network activity, and it does not run automatically — no code is downloaded or replaced without you clicking. If a newer version is found, a link appears in the app ("Update available: vX.X.X — click to install"); clicking it downloads the current `PanicButton.ps1` from this repo, overwrites your local copy, and restarts the app. If you'd rather not have even the version check happen, just delete the `Start-UpdateCheck` call near the bottom of the script — everything else works identically without it.
+
 ## ⚠️ Important
 
 - **Fully universal by design**: it kills whatever window has focus when you press the hotkey, with no exceptions besides a short list of core Windows processes (`explorer`, `dwm`, `csrss`, `winlogon`, `wininit`, `services`, `lsass`, `svchost`, and PowerShell/the app itself). If your browser, Discord, or anything else is focused when you hit the key, that's what dies. Know what's focused before you press it.
 - **No saving happens first.** Unsaved progress in whatever gets closed is lost, same as a crash or power-cut. Don't use it on anything with unsaved work you care about.
-- **Local only.** No networking, no telemetry, no persistence beyond the Startup shortcut you control.
+- **Network use is limited to the version check described above.** No telemetry, no data collection, no persistence beyond the Startup entry you control.
 
 ## Requirements
 
