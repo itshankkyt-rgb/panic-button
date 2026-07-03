@@ -290,19 +290,19 @@ $script:latestVersion = $null
 # Fetches a single small text file from GitHub to compare versions.
 # Nothing is downloaded/installed unless you click the link that appears.
 function Start-UpdateCheck {
-    $updateCheckJob = Start-Job -ScriptBlock {
+    $script:updateCheckJob = Start-Job -ScriptBlock {
         param($url)
         try { (Invoke-RestMethod -Uri $url -TimeoutSec 5).ToString().Trim() } catch { $null }
     } -ArgumentList $script:VersionCheckUrl
 
-    $updateTimer = [System.Windows.Forms.Timer]::new()
-    $updateTimer.Interval = 1500
-    $updateTimer.Add_Tick({
-        if ($updateCheckJob.State -notin @('Completed', 'Failed')) { return }
-        $updateTimer.Stop()
-        $updateTimer.Dispose()
-        $latestVersionString = Receive-Job -Job $updateCheckJob -ErrorAction SilentlyContinue
-        Remove-Job -Job $updateCheckJob -Force -ErrorAction SilentlyContinue
+    $script:updateTimer = [System.Windows.Forms.Timer]::new()
+    $script:updateTimer.Interval = 1500
+    $script:updateTimer.Add_Tick({
+        if ($script:updateCheckJob.State -notin @('Completed', 'Failed')) { return }
+        $script:updateTimer.Stop()
+        $script:updateTimer.Dispose()
+        $latestVersionString = Receive-Job -Job $script:updateCheckJob -ErrorAction SilentlyContinue
+        Remove-Job -Job $script:updateCheckJob -Force -ErrorAction SilentlyContinue
         if (-not $latestVersionString) { return }
         try {
             if ([version]$latestVersionString -gt [version]$script:AppVersion) {
@@ -312,7 +312,7 @@ function Start-UpdateCheck {
             }
         } catch {}
     })
-    $updateTimer.Start()
+    $script:updateTimer.Start()
 }
 
 function Install-Update {
