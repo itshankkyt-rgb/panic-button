@@ -10,9 +10,11 @@ This is a real Windows app (PowerShell + WinForms), not a background-only script
 
 ## How to run it
 
-Right-click **`PanicButton.ps1`** → **Run with PowerShell**. No install, no admin rights, no execution-policy setup needed — the script hides its own console window on launch, so that's the only file you need. (No `.vbs`/`.bat` wrapper — it's pure PowerShell end to end, since VBScript is being phased out of Windows.)
+**Easiest: [download `PanicButton.exe` from the latest release](../../releases/latest)** and double-click it. No install, no admin rights, no PowerShell menus to navigate. It's a compiled version of the exact same [`PanicButton.ps1`](PanicButton.ps1) in this repo (built with [PS2EXE](https://github.com/MScholtes/PS2EXE)) — read the source first if you want to verify that before running an .exe from a stranger on the internet, which is a reasonable thing to want.
 
-A small dark-themed window appears showing it's armed. From there you can:
+**Alternative: run the script directly.** Download `PanicButton.ps1` and right-click → **Run with PowerShell**. No `.vbs`/`.bat` wrapper needed either way — it's pure PowerShell end to end, and the script hides its own console window on launch.
+
+Either way, a small dark-themed window appears showing it's armed. From there you can:
 
 - **Hide to Tray** (or just hit the X) — tucks it into the system tray; the hotkey keeps working while hidden.
 - Click the tray icon (shield, near your clock) to bring the window back, or right-click it for Show/Exit.
@@ -21,21 +23,23 @@ A small dark-themed window appears showing it's armed. From there you can:
 
 ## Run at startup (optional)
 
-Open a PowerShell prompt in this folder and run:
+Open a terminal in the folder you downloaded to and run (adjust for whichever you're using):
 
 ```powershell
-.\PanicButton.ps1 -EnableAutostart
+.\PanicButton.exe -EnableAutostart      # if you're using the exe
+.\PanicButton.ps1 -EnableAutostart      # if you're using the script
 ```
 
-This adds a single entry to your user-level `HKCU:\...\Run` registry key (no admin rights needed) pointing back at this script. To remove it:
-
-```powershell
-.\PanicButton.ps1 -DisableAutostart
-```
+This adds a single entry to your user-level `HKCU:\...\Run` registry key (no admin rights needed) pointing back at the app. To remove it, run the same command with `-DisableAutostart` instead.
 
 ## Updates
 
-Once per launch, the app makes a single read-only request to a small [`VERSION`](VERSION) file in this repo to check if a newer release exists. That's the only network activity, and it does not run automatically — no code is downloaded or replaced without you clicking. If a newer version is found, a link appears in the app ("Update available: vX.X.X — click to install"); clicking it downloads the current `PanicButton.ps1` from this repo, overwrites your local copy, and restarts the app. If you'd rather not have even the version check happen, just delete the `Start-UpdateCheck` call near the bottom of the script — everything else works identically without it.
+Once per launch, the app makes a single read-only request to a small [`VERSION`](VERSION) file in this repo to check if a newer release exists. That's the only network activity, and it does not run automatically — no code is downloaded or replaced without you clicking.
+
+- **Script (`PanicButton.ps1`)**: if a newer version is found, a link appears ("Update available: vX.X.X — click to install"). Clicking it downloads the current `PanicButton.ps1` from this repo, overwrites your local copy, and restarts.
+- **Exe (`PanicButton.exe`)**: a running .exe is locked by Windows and can't overwrite itself, so the link instead says "click for download page" and opens this repo's [Releases](../../releases) page for you to grab the new version manually.
+
+If you'd rather not have even the version check happen, delete the `Start-UpdateCheck` call near the bottom of the script and rebuild/re-run — everything else works identically without it.
 
 ## ⚠️ Important
 
@@ -49,7 +53,7 @@ Windows 10 or 11. Nothing to install — it runs on PowerShell + .NET, both buil
 
 ## Files
 
-Just one: `PanicButton.ps1`. No wrapper scripts in any other language — launching, hiding its own console, and enabling/disabling autostart are all handled by the script itself via `-EnableAutostart`/`-DisableAutostart` switches.
+`PanicButton.ps1` is the only source file — no wrapper scripts in any other language. `PanicButton.exe`, attached to each [release](../../releases), is just that script compiled with PS2EXE for a no-PowerShell-menu download experience; it's not committed to the repo itself (rebuilt and attached at release time instead, so git history stays source-only).
 
 ## Design notes
 

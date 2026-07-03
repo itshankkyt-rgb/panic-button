@@ -13,17 +13,38 @@ param(
     [switch]$DisableAutostart
 )
 
+# ---------- detect script vs. compiled-exe (ps2exe) mode ----------
+# $PSCommandPath/$PSScriptRoot are empty inside a ps2exe-compiled binary,
+# so this is the one thing that reliably works in both cases.
+$currentProcessPath = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+$script:IsCompiledExe = $currentProcessPath -notmatch '\\(powershell|pwsh)\.exe$'
+if ($script:IsCompiledExe) {
+    $script:AppPath = $currentProcessPath
+    $script:AppRoot = Split-Path -Parent $currentProcessPath
+} else {
+    $script:AppPath = $PSCommandPath
+    $script:AppRoot = $PSScriptRoot
+}
+
 # ---------- autostart toggle (registry Run key, no vbs/bat needed) ----------
 if ($EnableAutostart -or $DisableAutostart) {
+    # Write-Host can hang under a ps2exe -noConsole build (no real host to write
+    # to), so use a MessageBox instead - it works identically in script or exe form.
+    Add-Type -AssemblyName System.Windows.Forms
+
     $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
     $runValueName = 'PanicButton'
     if ($EnableAutostart) {
-        $launchCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        if ($script:IsCompiledExe) {
+            $launchCommand = "`"$($script:AppPath)`""
+        } else {
+            $launchCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$($script:AppPath)`""
+        }
         Set-ItemProperty -Path $runKeyPath -Name $runValueName -Value $launchCommand
-        Write-Host "Panic Button will now start automatically when you log in."
+        [System.Windows.Forms.MessageBox]::Show("Panic Button will now start automatically when you log in.", "Panic Button") | Out-Null
     } else {
         Remove-ItemProperty -Path $runKeyPath -Name $runValueName -ErrorAction SilentlyContinue
-        Write-Host "Autostart disabled."
+        [System.Windows.Forms.MessageBox]::Show("Autostart disabled.", "Panic Button") | Out-Null
     }
     return
 }
@@ -40,11 +61,11 @@ if ($consoleHandle -ne [IntPtr]::Zero) {
     [PanicButtonInternal.ConsoleWindow]::ShowWindow($consoleHandle, 0) | Out-Null  # SW_HIDE
 }
 
-$script:AppVersion = '1.2.0'
+$script:AppVersion = '1.3.0'
 $script:VersionCheckUrl = 'https://raw.githubusercontent.com/itshankkyt-rgb/panic-button/main/VERSION'
 $script:LatestScriptUrl = 'https://raw.githubusercontent.com/itshankkyt-rgb/panic-button/main/PanicButton.ps1'
 
-$ConfigPath = "$PSScriptRoot\config.json"
+$ConfigPath = "$($script:AppRoot)\config.json"
 
 # Processes we refuse to kill even if focused, so the OS itself never gets nuked.
 $ProtectedProcessNames = @(
@@ -307,7 +328,11 @@ function Start-UpdateCheck {
         try {
             if ([version]$latestVersionString -gt [version]$script:AppVersion) {
                 $script:latestVersion = $latestVersionString
-                $lnkUpdate.Text = "Update available: v$latestVersionString - click to install"
+                if ($script:IsCompiledExe) {
+                    $lnkUpdate.Text = "Update available: v$latestVersionString - click for download page"
+                } else {
+                    $lnkUpdate.Text = "Update available: v$latestVersionString - click to install"
+                }
                 $lnkUpdate.Visible = $true
             }
         } catch {}
@@ -316,6 +341,13 @@ function Start-UpdateCheck {
 }
 
 function Install-Update {
+    # Compiled .exe builds are locked by Windows while running, so they can't
+    # overwrite themselves - just send the user to the release page instead.
+    if ($script:IsCompiledExe) {
+        Start-Process 'https://github.com/itshankkyt-rgb/panic-button/releases/latest'
+        return
+    }
+
     $confirmResult = [System.Windows.Forms.MessageBox]::Show(
         "Download and install version $($script:latestVersion)? Panic Button will restart.",
         "Panic Button Update", 'YesNo', 'Question')
@@ -326,12 +358,12 @@ function Install-Update {
         if ([string]::IsNullOrWhiteSpace($newScriptContent) -or $newScriptContent.Length -lt 500) {
             throw "Downloaded content looks invalid - aborting."
         }
-        Set-Content -Path $PSCommandPath -Value $newScriptContent -Encoding UTF8
+        Set-Content -Path $script:AppPath -Value $newScriptContent -Encoding UTF8
 
         $script:reallyExiting = $true
         $form.UnregisterGlobalHotkey()
         $icon.Visible = $false
-        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`"")
+        Start-Process powershell.exe -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$($script:AppPath)`"")
         [System.Windows.Forms.Application]::Exit()
     } catch {
         [System.Windows.Forms.MessageBox]::Show("Update failed: $_", "Panic Button", 'OK', 'Error') | Out-Null
