@@ -10,7 +10,7 @@ This is a real Windows app (PowerShell + WinForms), not a background-only script
 
 ## How to run it
 
-Double-click **`Launch PanicButton.vbs`**. No install, no admin rights needed.
+Right-click **`PanicButton.ps1`** → **Run with PowerShell**. No install, no admin rights, no execution-policy setup needed — the script hides its own console window on launch, so that's the only file you need. (No `.vbs`/`.bat` wrapper — it's pure PowerShell end to end, since VBScript is being phased out of Windows.)
 
 A small dark-themed window appears showing it's armed. From there you can:
 
@@ -21,7 +21,17 @@ A small dark-themed window appears showing it's armed. From there you can:
 
 ## Run at startup (optional)
 
-Run `Enable Autostart.bat` once — it copies the silent launcher into your Windows Startup folder. Run `Disable Autostart.bat` to remove it.
+Open a PowerShell prompt in this folder and run:
+
+```powershell
+.\PanicButton.ps1 -EnableAutostart
+```
+
+This adds a single entry to your user-level `HKCU:\...\Run` registry key (no admin rights needed) pointing back at this script. To remove it:
+
+```powershell
+.\PanicButton.ps1 -DisableAutostart
+```
 
 ## ⚠️ Important
 
@@ -35,12 +45,12 @@ Windows 10 or 11. Nothing to install — it runs on PowerShell + .NET, both buil
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `PanicButton.ps1` | The app itself (readable source) |
-| `Launch PanicButton.vbs` | Silent launcher — use this to run it |
-| `Enable Autostart.bat` | Adds it to Windows startup |
-| `Disable Autostart.bat` | Removes it from Windows startup |
+Just one: `PanicButton.ps1`. No wrapper scripts in any other language — launching, hiding its own console, and enabling/disabling autostart are all handled by the script itself via `-EnableAutostart`/`-DisableAutostart` switches.
+
+## Design notes
+
+- **Why `taskkill /F /T` instead of `Stop-Process`?** Windows PowerShell 5.1's `Stop-Process` has no built-in tree-kill — it only signals the one PID, not its children. (.NET's `Process.Kill($true)` overload does support that, but it's PS7+/.NET 5+ only, and this is meant to run on stock Windows PowerShell 5.1 with zero dependencies.) `taskkill /T` handles that reliably on any Windows version.
+- **High-DPI awareness** is explicitly enabled (`Application.SetHighDpiMode` + Per-Monitor-V2) so the UI renders crisp rather than OS-upscaled/blurry on scaled displays.
 
 ## License
 

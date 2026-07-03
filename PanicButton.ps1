@@ -2,7 +2,43 @@
 # Panic Button (windowed app)
 # Press the configured hotkey to instantly force-kill whatever
 # window/game currently has focus. Has a real UI + tray icon.
+#
+# Usage:
+#   .\PanicButton.ps1                  Launch the app (hides its own console)
+#   .\PanicButton.ps1 -EnableAutostart Add to Windows startup (HKCU Run key)
+#   .\PanicButton.ps1 -DisableAutostart Remove from Windows startup
 # ============================================================
+param(
+    [switch]$EnableAutostart,
+    [switch]$DisableAutostart
+)
+
+# ---------- autostart toggle (registry Run key, no vbs/bat needed) ----------
+if ($EnableAutostart -or $DisableAutostart) {
+    $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    $runValueName = 'PanicButton'
+    if ($EnableAutostart) {
+        $launchCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`""
+        Set-ItemProperty -Path $runKeyPath -Name $runValueName -Value $launchCommand
+        Write-Host "Panic Button will now start automatically when you log in."
+    } else {
+        Remove-ItemProperty -Path $runKeyPath -Name $runValueName -ErrorAction SilentlyContinue
+        Write-Host "Autostart disabled."
+    }
+    return
+}
+
+# ---------- hide this process's own console window ----------
+# Done in-process (no relaunch, no vbs/bat wrapper) so double-clicking /
+# "Run with PowerShell" / the startup entry above don't leave a console behind.
+Add-Type -Name ConsoleWindow -Namespace PanicButtonInternal -MemberDefinition @'
+[DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+[DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+'@
+$consoleHandle = [PanicButtonInternal.ConsoleWindow]::GetConsoleWindow()
+if ($consoleHandle -ne [IntPtr]::Zero) {
+    [PanicButtonInternal.ConsoleWindow]::ShowWindow($consoleHandle, 0) | Out-Null  # SW_HIDE
+}
 
 $ConfigPath = "$PSScriptRoot\config.json"
 
@@ -14,6 +50,12 @@ $ProtectedProcessNames = @(
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+
+# High-DPI awareness - without this, Windows bitmap-scales the UI on
+# non-100% displays, which is what makes it look blurry/asymmetric.
+# (SetHighDpiMode needs .NET Framework 4.7+; older versions just skip it.)
+try { [System.Windows.Forms.Application]::SetHighDpiMode([System.Windows.Forms.HighDpiMode]::PerMonitorV2) | Out-Null } catch {}
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
 Add-Type @"
 using System;
@@ -79,20 +121,23 @@ function Load-Config {
     }
     return $default
 }
+
 function Save-Config($cfg) {
     $cfg | ConvertTo-Json | Set-Content -Path $ConfigPath -Encoding UTF8
 }
+
 $script:cfg = Load-Config
 
-function Get-ModifierValue([string]$names) {
+function Get-ModifierValue([string]$modifierNames) {
     $map = @{ 'Alt' = 0x0001; 'Control' = 0x0002; 'Shift' = 0x0004; 'Win' = 0x0008; 'None' = 0x0000 }
-    $val = 0
-    foreach ($n in ($names -split ',')) {
-        $n = $n.Trim()
-        if ($map.ContainsKey($n)) { $val = $val -bor $map[$n] }
+    $value = 0
+    foreach ($modifierName in ($modifierNames -split ',')) {
+        $modifierName = $modifierName.Trim()
+        if ($map.ContainsKey($modifierName)) { $value = $value -bor $map[$modifierName] }
     }
-    return [uint32]$val
+    return [uint32]$value
 }
+
 function Format-HotkeyLabel($modifier, $key) {
     if ($modifier -eq 'None' -or [string]::IsNullOrWhiteSpace($modifier)) { return $key }
     return "$modifier+$key"
@@ -105,79 +150,80 @@ $colAccent  = [System.Drawing.Color]::FromArgb(225, 45, 45)
 $colGreen   = [System.Drawing.Color]::FromArgb(60, 200, 110)
 $colGray    = [System.Drawing.Color]::FromArgb(140, 140, 150)
 $colText    = [System.Drawing.Color]::FromArgb(235, 235, 240)
-$fontTitle  = New-Object System.Drawing.Font("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
-$fontLabel  = New-Object System.Drawing.Font("Segoe UI", 10)
-$fontMono   = New-Object System.Drawing.Font("Consolas", 11, [System.Drawing.FontStyle]::Bold)
-$fontSmall  = New-Object System.Drawing.Font("Segoe UI", 8.5)
+$fontTitle  = [System.Drawing.Font]::new("Segoe UI", 18, [System.Drawing.FontStyle]::Bold)
+$fontLabel  = [System.Drawing.Font]::new("Segoe UI", 10)
+$fontMono   = [System.Drawing.Font]::new("Consolas", 11, [System.Drawing.FontStyle]::Bold)
+$fontSmall  = [System.Drawing.Font]::new("Segoe UI", 8.5)
 
 # ---------- build form ----------
-$form = New-Object HotkeyForm
+$form = [HotkeyForm]::new()
 $form.Text = "Panic Button"
-$form.Size = New-Object System.Drawing.Size(380, 480)
+$form.Size = [System.Drawing.Size]::new(380, 480)
 $form.StartPosition = "CenterScreen"
 $form.FormBorderStyle = "FixedDialog"
 $form.MaximizeBox = $false
+$form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
 $form.BackColor = $colBg
 $form.ForeColor = $colText
 $form.KeyPreview = $true
 $form.Icon = [System.Drawing.SystemIcons]::Shield
 
-$lblTitle = New-Object System.Windows.Forms.Label
+$lblTitle = [System.Windows.Forms.Label]::new()
 $lblTitle.Text = "PANIC BUTTON"
 $lblTitle.Font = $fontTitle
 $lblTitle.ForeColor = $colAccent
 $lblTitle.AutoSize = $false
 $lblTitle.TextAlign = "MiddleCenter"
-$lblTitle.Location = New-Object System.Drawing.Point(0, 20)
-$lblTitle.Size = New-Object System.Drawing.Size(380, 36)
+$lblTitle.Location = [System.Drawing.Point]::new(0, 20)
+$lblTitle.Size = [System.Drawing.Size]::new(380, 36)
 $form.Controls.Add($lblTitle)
 
 # status dot + text
-$lblStatus = New-Object System.Windows.Forms.Label
+$lblStatus = [System.Windows.Forms.Label]::new()
 $lblStatus.Font = $fontLabel
 $lblStatus.TextAlign = "MiddleCenter"
-$lblStatus.Location = New-Object System.Drawing.Point(0, 64)
-$lblStatus.Size = New-Object System.Drawing.Size(380, 24)
+$lblStatus.Location = [System.Drawing.Point]::new(0, 64)
+$lblStatus.Size = [System.Drawing.Size]::new(380, 24)
 $form.Controls.Add($lblStatus)
 
 # hotkey panel
-$panelHotkey = New-Object System.Windows.Forms.Panel
+$panelHotkey = [System.Windows.Forms.Panel]::new()
 $panelHotkey.BackColor = $colPanel
-$panelHotkey.Location = New-Object System.Drawing.Point(30, 100)
-$panelHotkey.Size = New-Object System.Drawing.Size(320, 70)
+$panelHotkey.Location = [System.Drawing.Point]::new(30, 100)
+$panelHotkey.Size = [System.Drawing.Size]::new(320, 70)
 $form.Controls.Add($panelHotkey)
 
-$lblHotkeyCaption = New-Object System.Windows.Forms.Label
+$lblHotkeyCaption = [System.Windows.Forms.Label]::new()
 $lblHotkeyCaption.Text = "CURRENT HOTKEY"
 $lblHotkeyCaption.Font = $fontSmall
 $lblHotkeyCaption.ForeColor = $colGray
 $lblHotkeyCaption.AutoSize = $false
 $lblHotkeyCaption.TextAlign = "MiddleCenter"
-$lblHotkeyCaption.Location = New-Object System.Drawing.Point(0, 8)
-$lblHotkeyCaption.Size = New-Object System.Drawing.Size(320, 16)
+$lblHotkeyCaption.Location = [System.Drawing.Point]::new(0, 8)
+$lblHotkeyCaption.Size = [System.Drawing.Size]::new(320, 16)
 $panelHotkey.Controls.Add($lblHotkeyCaption)
 
-$lblHotkeyValue = New-Object System.Windows.Forms.Label
+$lblHotkeyValue = [System.Windows.Forms.Label]::new()
 $lblHotkeyValue.Font = $fontMono
 $lblHotkeyValue.ForeColor = $colText
 $lblHotkeyValue.TextAlign = "MiddleCenter"
-$lblHotkeyValue.Location = New-Object System.Drawing.Point(0, 26)
-$lblHotkeyValue.Size = New-Object System.Drawing.Size(320, 30)
+$lblHotkeyValue.Location = [System.Drawing.Point]::new(0, 26)
+$lblHotkeyValue.Size = [System.Drawing.Size]::new(320, 30)
 $panelHotkey.Controls.Add($lblHotkeyValue)
 
 # buttons row
-function New-FlatButton($text, $x, $y, $w, $h, $bg, $fg) {
-    $btn = New-Object System.Windows.Forms.Button
-    $btn.Text = $text
-    $btn.FlatStyle = "Flat"
-    $btn.FlatAppearance.BorderSize = 0
-    $btn.BackColor = $bg
-    $btn.ForeColor = $fg
-    $btn.Font = $fontLabel
-    $btn.Location = New-Object System.Drawing.Point($x, $y)
-    $btn.Size = New-Object System.Drawing.Size($w, $h)
-    $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
-    return $btn
+function New-FlatButton($text, $x, $y, $width, $height, $backColor, $foreColor) {
+    $button = [System.Windows.Forms.Button]::new()
+    $button.Text = $text
+    $button.FlatStyle = "Flat"
+    $button.FlatAppearance.BorderSize = 0
+    $button.BackColor = $backColor
+    $button.ForeColor = $foreColor
+    $button.Font = $fontLabel
+    $button.Location = [System.Drawing.Point]::new($x, $y)
+    $button.Size = [System.Drawing.Size]::new($width, $height)
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    return $button
 }
 
 $btnChangeKey = New-FlatButton "Change Hotkey" 30 185 150 34 $colPanel $colText
@@ -187,17 +233,17 @@ $btnToggleArm = New-FlatButton "Disarm" 200 185 150 34 $colAccent ([System.Drawi
 $form.Controls.Add($btnToggleArm)
 
 # history
-$lblHistoryCaption = New-Object System.Windows.Forms.Label
+$lblHistoryCaption = [System.Windows.Forms.Label]::new()
 $lblHistoryCaption.Text = "KILL HISTORY"
 $lblHistoryCaption.Font = $fontSmall
 $lblHistoryCaption.ForeColor = $colGray
-$lblHistoryCaption.Location = New-Object System.Drawing.Point(30, 232)
-$lblHistoryCaption.Size = New-Object System.Drawing.Size(320, 16)
+$lblHistoryCaption.Location = [System.Drawing.Point]::new(30, 232)
+$lblHistoryCaption.Size = [System.Drawing.Size]::new(320, 16)
 $form.Controls.Add($lblHistoryCaption)
 
-$lstHistory = New-Object System.Windows.Forms.ListBox
-$lstHistory.Location = New-Object System.Drawing.Point(30, 252)
-$lstHistory.Size = New-Object System.Drawing.Size(320, 130)
+$lstHistory = [System.Windows.Forms.ListBox]::new()
+$lstHistory.Location = [System.Drawing.Point]::new(30, 252)
+$lstHistory.Size = [System.Drawing.Size]::new(320, 130)
 $lstHistory.BackColor = $colPanel
 $lstHistory.ForeColor = $colText
 $lstHistory.BorderStyle = "FixedSingle"
@@ -211,10 +257,10 @@ $btnExit = New-FlatButton "Exit" 200 396 150 34 $colPanel $colGray
 $form.Controls.Add($btnExit)
 
 # ---------- tray icon ----------
-$icon = New-Object System.Windows.Forms.NotifyIcon
+$icon = [System.Windows.Forms.NotifyIcon]::new()
 $icon.Icon = [System.Drawing.SystemIcons]::Shield
 $icon.Visible = $true
-$menu = New-Object System.Windows.Forms.ContextMenuStrip
+$menu = [System.Windows.Forms.ContextMenuStrip]::new()
 $showItem = $menu.Items.Add("Show")
 $exitItem = $menu.Items.Add("Exit Panic Button")
 $icon.ContextMenuStrip = $menu
@@ -244,9 +290,9 @@ function Refresh-StatusUI {
 function Apply-Hotkey {
     $form.UnregisterGlobalHotkey()
     if ($script:cfg.Armed) {
-        $modVal = Get-ModifierValue $script:cfg.Modifier
-        $vkVal  = [uint32][System.Windows.Forms.Keys]::($script:cfg.Key)
-        $ok = $form.RegisterGlobalHotkey($modVal, $vkVal)
+        $modifierValue = Get-ModifierValue $script:cfg.Modifier
+        $keyValue = [uint32][System.Windows.Forms.Keys]::($script:cfg.Key)
+        $ok = $form.RegisterGlobalHotkey($modifierValue, $keyValue)
         if (-not $ok) {
             $icon.ShowBalloonTip(2500, "Panic Button", "Could not register hotkey - it may be in use by another app.", 'Error')
         }
@@ -271,6 +317,9 @@ $form.add_HotkeyPressed({
         return
     }
 
+    # taskkill /F /T is used instead of Stop-Process because Windows PowerShell 5.1's
+    # Stop-Process has no tree-kill: it only signals the one PID, not child processes.
+    # (.NET's Process.Kill(entireProcessTree) exists, but only on PS7+/.NET 5+.)
     Start-Process -FilePath "taskkill.exe" -ArgumentList "/F","/T","/PID",$targetPid -WindowStyle Hidden -ErrorAction SilentlyContinue
     Add-HistoryEntry "Killed: $($proc.ProcessName) (PID $targetPid)"
     $icon.ShowBalloonTip(1500, "Panic Button", "Killed: $($proc.ProcessName)", 'Info')
@@ -283,26 +332,26 @@ $btnChangeKey.Add_Click({
 })
 
 $form.Add_KeyDown({
-    param($s, $e)
+    param($eventSender, $eventArgs)
     if (-not $script:listening) { return }
-    $modKeys = @('ControlKey','ShiftKey','Menu','LWin','RWin')
-    if ($modKeys -contains $e.KeyCode.ToString()) { return }
+    $modifierKeyNames = @('ControlKey', 'ShiftKey', 'Menu', 'LWin', 'RWin')
+    if ($modifierKeyNames -contains $eventArgs.KeyCode.ToString()) { return }
 
-    $mods = @()
-    if ($e.Control) { $mods += 'Control' }
-    if ($e.Alt)     { $mods += 'Alt' }
-    if ($e.Shift)   { $mods += 'Shift' }
-    $modStr = if ($mods.Count -gt 0) { $mods -join ', ' } else { 'None' }
+    $modifierList = [System.Collections.Generic.List[string]]::new()
+    if ($eventArgs.Control) { $modifierList.Add('Control') }
+    if ($eventArgs.Alt)     { $modifierList.Add('Alt') }
+    if ($eventArgs.Shift)   { $modifierList.Add('Shift') }
+    $modifierString = if ($modifierList.Count -gt 0) { $modifierList -join ', ' } else { 'None' }
 
-    $script:cfg.Modifier = $modStr
-    $script:cfg.Key = $e.KeyCode.ToString()
+    $script:cfg.Modifier = $modifierString
+    $script:cfg.Key = $eventArgs.KeyCode.ToString()
     Save-Config $script:cfg
     Apply-Hotkey
 
     $script:listening = $false
     $btnChangeKey.Enabled = $true
-    $e.Handled = $true
-    $e.SuppressKeyPress = $true
+    $eventArgs.Handled = $true
+    $eventArgs.SuppressKeyPress = $true
 })
 
 $btnToggleArm.Add_Click({
@@ -326,9 +375,9 @@ $btnExit.Add_Click($doExit)
 $exitItem.Add_Click($doExit)
 
 $form.Add_FormClosing({
-    param($s, $e)
+    param($eventSender, $eventArgs)
     if (-not $script:reallyExiting) {
-        $e.Cancel = $true
+        $eventArgs.Cancel = $true
         $form.Hide()
     }
 })
